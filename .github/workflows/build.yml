@@ -40,27 +40,40 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $agent = Start-Process -FilePath '.\dist\pos-print-agent.exe' `
-            -ArgumentList '--listen', '127.0.0.1:8735', '--allow-origin', 'http://localhost:3000', '--log-level', 'debug' `
-            -PassThru
-
+          $outFile = Join-Path $env:RUNNER_TEMP 'agent.out.log'
+          $errFile = Join-Path $env:RUNNER_TEMP 'agent.err.log'
+          $agent = $null
           $listener = $null
           try {
+            Write-Host 'stage: start agent'
+            $agent = Start-Process -FilePath '.\dist\pos-print-agent.exe' `
+              -ArgumentList '--listen', '127.0.0.1:8735', '--allow-origin', 'http://localhost:3000', '--log-level', 'debug' `
+              -RedirectStandardOutput $outFile -RedirectStandardError $errFile -PassThru
+            Write-Host "agent pid $($agent.Id)"
+
+            Write-Host 'stage: health'
             $health = $null
             for ($i = 0; $i -lt 40; $i++) {
               try { $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/health' -TimeoutSec 2; break }
-              catch { Start-Sleep -Milliseconds 250 }
+              catch {
+                if ($agent.HasExited) {
+                  $err = Get-Content $errFile -Raw -ErrorAction SilentlyContinue
+                  throw "the agent exited with code $($agent.ExitCode). stderr: $err"
+                }
+                Start-Sleep -Milliseconds 250
+              }
             }
             if (-not $health) { throw 'the agent did not answer /v1/health' }
             if (-not $health.ok) { throw 'health did not report ok' }
             if ([string]::IsNullOrWhiteSpace($health.token)) { throw 'health did not return a token' }
             Write-Host ("agent {0} contract {1} capabilities {2}" -f $health.agentVersion, $health.contractVersion, ($health.capabilities -join ','))
 
+            Write-Host 'stage: printers'
             $headers = @{ 'X-Pos-Agent-Token' = $health.token }
             $printers = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/printers?transport=USB' -Headers $headers
-            if ($null -eq $printers.printers) { throw 'the printers response has no printers array' }
             Write-Host ("USB queues found: {0}" -f @($printers.printers).Count)
 
+            Write-Host 'stage: print over TCP'
             $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 9100)
             $listener.Start()
 
@@ -80,6 +93,7 @@ jobs:
             if ($report.bytesWritten -ne $payload.Length) { throw "bytesWritten was $($report.bytesWritten)" }
             Write-Host ("print ok via {0} in {1} ms" -f $report.via, $report.durationMs)
 
+            Write-Host 'stage: read printer bytes'
             $client = $listener.AcceptTcpClient()
             $stream = $client.GetStream()
             $stream.ReadTimeout = 5000
@@ -92,11 +106,18 @@ jobs:
             Write-Host 'the printer received the ESC/POS bytes unchanged'
             $client.Close()
           }
+          catch {
+            Write-Host "::error::smoke test failed: $($_.Exception.Message)"
+            Write-Host "at: $($_.ScriptStackTrace)"
+            if (Test-Path $outFile) { Write-Host '--- agent stdout ---'; Get-Content $outFile -Raw }
+            if (Test-Path $errFile) { Write-Host '--- agent stderr ---'; Get-Content $errFile -Raw }
+            throw
+          }
           finally {
             if ($listener) { $listener.Stop() }
-            if (Get-Process -Id $agent.Id -ErrorAction SilentlyContinue) { Stop-Process -Id $agent.Id -Force }
+            if ($agent -and -not $agent.HasExited) { Stop-Process -Id $agent.Id -Force -ErrorAction SilentlyContinue }
             $log = Join-Path $env:PROGRAMDATA 'LnkitsPrintAgent\agent.log'
-            if (Test-Path $log) { Write-Host '--- agent.log ---'; Get-Content $log -Tail 40 }
+            if (Test-Path $log) { Write-Host '--- agent.log ---'; Get-Content $log -Tail 60 }
           }
 
       # Installs the Windows service (LocalSystem) and removes it again, which
@@ -105,17 +126,24 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & '.\dist\pos-print-agent.exe' --install
-          if ($LASTEXITCODE -ne 0) { throw "--install failed with $LASTEXITCODE" }
-          Start-Sleep -Seconds 3
-          $query = sc.exe query LnkitsPrintAgent
-          Write-Host ($query -join "`n")
-          if ($LASTEXITCODE -ne 0) { throw 'the service is not registered' }
-          if (($query -join "`n") -notmatch 'RUNNING') { throw 'the service did not reach RUNNING' }
-          $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/health' -TimeoutSec 5
-          if (-not $health.ok) { throw 'the service did not answer /v1/health' }
-          & '.\dist\pos-print-agent.exe' --uninstall
-          if ($LASTEXITCODE -ne 0) { throw "--uninstall failed with $LASTEXITCODE" }
+          try {
+            & '.\dist\pos-print-agent.exe' --install
+            if ($LASTEXITCODE -ne 0) { throw "--install failed with $LASTEXITCODE" }
+            Start-Sleep -Seconds 3
+            $query = sc.exe query LnkitsPrintAgent
+            Write-Host ($query -join "`n")
+            if ($LASTEXITCODE -ne 0) { throw 'the service is not registered' }
+            if (($query -join "`n") -notmatch 'RUNNING') { throw 'the service did not reach RUNNING' }
+            $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/health' -TimeoutSec 5
+            if (-not $health.ok) { throw 'the service did not answer /v1/health' }
+          }
+          catch {
+            Write-Host "::error::service smoke failed: $($_.Exception.Message)"
+            throw
+          }
+          finally {
+            & '.\dist\pos-print-agent.exe' --uninstall
+          }
 
       - uses: actions/upload-artifact@v4
         with:
