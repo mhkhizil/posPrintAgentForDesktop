@@ -34,6 +34,89 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           go build -trimpath -ldflags "-s -w -X main.version=${{ github.run_number }}" -o dist/pos-print-agent.exe ./cmd/pos-print-agent
 
+      # Runs the real binary and prints to a real TCP socket, so the Win32
+      # spooler/TCP wiring is exercised on Windows instead of only compiled.
+      - name: Smoke test (health, printers, TCP print)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $agent = Start-Process -FilePath '.\dist\pos-print-agent.exe' `
+            -ArgumentList '--listen', '127.0.0.1:8735', '--allow-origin', 'http://localhost:3000', '--log-level', 'debug' `
+            -PassThru
+
+          $listener = $null
+          try {
+            $health = $null
+            for ($i = 0; $i -lt 40; $i++) {
+              try { $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/health' -TimeoutSec 2; break }
+              catch { Start-Sleep -Milliseconds 250 }
+            }
+            if (-not $health) { throw 'the agent did not answer /v1/health' }
+            if (-not $health.ok) { throw 'health did not report ok' }
+            if ([string]::IsNullOrWhiteSpace($health.token)) { throw 'health did not return a token' }
+            Write-Host ("agent {0} contract {1} capabilities {2}" -f $health.agentVersion, $health.contractVersion, ($health.capabilities -join ','))
+
+            $headers = @{ 'X-Pos-Agent-Token' = $health.token }
+            $printers = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/printers?transport=USB' -Headers $headers
+            if ($null -eq $printers.printers) { throw 'the printers response has no printers array' }
+            Write-Host ("USB queues found: {0}" -f @($printers.printers).Count)
+
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 9100)
+            $listener.Start()
+
+            $payload = [byte[]](0x1b, 0x40, 0x41, 0x42)
+            $body = @{
+              jobId      = 'ci-smoke'
+              transport  = 'NETWORK'
+              host       = '127.0.0.1'
+              port       = 9100
+              dataBase64 = [Convert]::ToBase64String($payload)
+              encoding   = 'base64'
+            } | ConvertTo-Json
+
+            $report = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8735/v1/print' `
+              -Headers $headers -ContentType 'application/json' -Body $body
+            if (-not $report.success) { throw 'the print endpoint did not report success' }
+            if ($report.bytesWritten -ne $payload.Length) { throw "bytesWritten was $($report.bytesWritten)" }
+            Write-Host ("print ok via {0} in {1} ms" -f $report.via, $report.durationMs)
+
+            $client = $listener.AcceptTcpClient()
+            $stream = $client.GetStream()
+            $stream.ReadTimeout = 5000
+            $buffer = New-Object byte[] 32
+            $read = $stream.Read($buffer, 0, $buffer.Length)
+            if ($read -ne $payload.Length) { throw "the printer received $read bytes, expected $($payload.Length)" }
+            for ($i = 0; $i -lt $payload.Length; $i++) {
+              if ($buffer[$i] -ne $payload[$i]) { throw "byte $i was $($buffer[$i]), expected $($payload[$i])" }
+            }
+            Write-Host 'the printer received the ESC/POS bytes unchanged'
+            $client.Close()
+          }
+          finally {
+            if ($listener) { $listener.Stop() }
+            if (Get-Process -Id $agent.Id -ErrorAction SilentlyContinue) { Stop-Process -Id $agent.Id -Force }
+            $log = Join-Path $env:PROGRAMDATA 'LnkitsPrintAgent\agent.log'
+            if (Test-Path $log) { Write-Host '--- agent.log ---'; Get-Content $log -Tail 40 }
+          }
+
+      # Installs the Windows service (LocalSystem) and removes it again, which
+      # exercises the hand-written SCM dispatcher.
+      - name: Service install smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & '.\dist\pos-print-agent.exe' --install
+          if ($LASTEXITCODE -ne 0) { throw "--install failed with $LASTEXITCODE" }
+          Start-Sleep -Seconds 3
+          $query = sc.exe query LnkitsPrintAgent
+          Write-Host ($query -join "`n")
+          if ($LASTEXITCODE -ne 0) { throw 'the service is not registered' }
+          if (($query -join "`n") -notmatch 'RUNNING') { throw 'the service did not reach RUNNING' }
+          $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/health' -TimeoutSec 5
+          if (-not $health.ok) { throw 'the service did not answer /v1/health' }
+          & '.\dist\pos-print-agent.exe' --uninstall
+          if ($LASTEXITCODE -ne 0) { throw "--uninstall failed with $LASTEXITCODE" }
+
       - uses: actions/upload-artifact@v4
         with:
           name: pos-print-agent-windows

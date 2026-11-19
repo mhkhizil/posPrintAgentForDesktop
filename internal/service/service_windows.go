@@ -59,8 +59,8 @@ type serviceTableEntry struct {
 
 var (
 	statusHandle   syscall.Handle
-	currentState   = stateStopped
-	changeRequests = make(chan uint32, 1)
+	currentState   uint32 = stateStopped
+	changeRequests        = make(chan uint32, 1)
 	serviceRunner  Runner
 	serviceExit    uint32
 )
