@@ -50,7 +50,20 @@ type printerInfo2 struct {
 // ListUSB returns the USB print queues installed on this computer. Every queue is
 // listed regardless of its name, which is what removes the "rename the printer to
 // POS-80 first" step.
-func ListUSB() ([]Printer, error) {
+//
+// The parse below walks Win32 memory, so a recover keeps a bad spooler response
+// from taking the whole service (and every open POS tab) down with it.
+func ListUSB() (list []Printer, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			list = nil
+			err = &Error{
+				Code:    "PRINTER_ENUMERATION_FAILED",
+				Message: "Windows returned a printer list the agent could not read. Restart the LnkitsPrintAgent service and try again.",
+			}
+		}
+	}()
+
 	buf, returned, err := enumPrinters(printerEnumLocal | printerEnumConnections)
 	if err != nil {
 		return nil, err
@@ -59,8 +72,15 @@ func ListUSB() ([]Printer, error) {
 		return []Printer{}, nil
 	}
 
-	list := make([]Printer, 0, returned)
 	entrySize := unsafe.Sizeof(printerInfo2{})
+	if uintptr(returned)*entrySize > uintptr(len(buf)) {
+		return nil, &Error{
+			Code:    "PRINTER_ENUMERATION_FAILED",
+			Message: "Windows returned an inconsistent printer list. Restart the LnkitsPrintAgent service and try again.",
+		}
+	}
+
+	list = make([]Printer, 0, returned)
 	base := unsafe.Pointer(&buf[0])
 
 	for index := 0; index < returned; index++ {
