@@ -92,7 +92,7 @@ needs an elevated `pnputil /remove-device <instance>`.
 | `PRINTER_ACCESS_DENIED` | The queue belongs to another user/session | Run the service as LocalSystem (the default) |
 | Nothing prints, no error | Wrong queue (e.g. a PDF printer) | Pick the queue whose port is `USB…` |
 | Bluetooth printer missing | Not paired, or BLE-only | Pair it in Windows; BLE-only printers are out of scope in v1 |
-| Printer list is empty | No USB queue at all | `Get-Printer` in PowerShell must list it first |
+| Printer list is empty | The Print Spooler service is stopped, or PowerShell is in Constrained Language mode | `Get-Service Spooler`; `Get-Printer` must list the printer in PowerShell |
 
 Logs are text and rotate at 5 MB, three files:
 
