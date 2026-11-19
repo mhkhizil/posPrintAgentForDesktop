@@ -3,6 +3,7 @@
 package printers
 
 import (
+	"log/slog"
 	"runtime"
 	"sort"
 	"strings"
@@ -132,16 +133,19 @@ func ListUSB() (list []Printer, err error) {
 // buffer from the value the spooler reports first.
 func enumPrinters(flags uint32) ([]byte, int, error) {
 	var needed, returned uint32
+	slog.Debug("enumPrinters: sizing", "flags", flags)
 	procEnumPrintersW.Call(
 		uintptr(flags), 2, 0, 0,
 		uintptr(unsafe.Pointer(&needed)),
 		uintptr(unsafe.Pointer(&returned)),
 	)
+	slog.Debug("enumPrinters: sized", "needed", needed, "returned", returned, "structSize", unsafe.Sizeof(printerInfo2{}))
 	if needed == 0 {
 		return nil, 0, nil
 	}
 
 	buf := make([]byte, needed)
+	slog.Debug("enumPrinters: filling", "bytes", needed)
 	ok, _, callErr := procEnumPrintersW.Call(
 		uintptr(flags), 2,
 		uintptr(unsafe.Pointer(&buf[0])),
@@ -153,6 +157,7 @@ func enumPrinters(flags uint32) ([]byte, int, error) {
 	// the collector cannot see it. Without this, a GC cycle during the syscall
 	// frees it and the spooler writes into freed memory (an access violation).
 	runtime.KeepAlive(buf)
+	slog.Debug("enumPrinters: filled", "ok", ok, "returned", returned, "needed", needed)
 	if ok == 0 {
 		return nil, 0, spoolerError(winErr(callErr), "the local printer list")
 	}
