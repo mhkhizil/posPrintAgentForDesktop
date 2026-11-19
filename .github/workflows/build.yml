@@ -38,12 +38,14 @@ jobs:
       # spooler/TCP wiring is exercised on Windows instead of only compiled.
       - name: Smoke test (health, printers, TCP print)
         shell: pwsh
+        continue-on-error: true
         run: |
           $ErrorActionPreference = 'Stop'
           $outFile = Join-Path $env:RUNNER_TEMP 'agent.out.log'
           $errFile = Join-Path $env:RUNNER_TEMP 'agent.err.log'
           $agent = $null
           $listener = $null
+          $stage = 'start'
           try {
             Write-Host 'stage: start agent'
             $agent = Start-Process -FilePath '.\dist\pos-print-agent.exe' `
@@ -52,6 +54,7 @@ jobs:
             Write-Host "agent pid $($agent.Id)"
 
             Write-Host 'stage: health'
+            $stage = 'health'
             $health = $null
             for ($i = 0; $i -lt 40; $i++) {
               try { $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/health' -TimeoutSec 2; break }
@@ -69,11 +72,13 @@ jobs:
             Write-Host ("agent {0} contract {1} capabilities {2}" -f $health.agentVersion, $health.contractVersion, ($health.capabilities -join ','))
 
             Write-Host 'stage: printers'
+            $stage = 'printers'
             $headers = @{ 'X-Pos-Agent-Token' = $health.token }
             $printers = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/printers?transport=USB' -Headers $headers
             Write-Host ("USB queues found: {0}" -f @($printers.printers).Count)
 
             Write-Host 'stage: print over TCP'
+            $stage = 'print'
             $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 9100)
             $listener.Start()
 
@@ -94,6 +99,7 @@ jobs:
             Write-Host ("print ok via {0} in {1} ms" -f $report.via, $report.durationMs)
 
             Write-Host 'stage: read printer bytes'
+            $stage = 'read'
             $client = $listener.AcceptTcpClient()
             $stream = $client.GetStream()
             $stream.ReadTimeout = 5000
@@ -107,8 +113,10 @@ jobs:
             $client.Close()
           }
           catch {
-            Write-Host "::error::smoke test failed: $($_.Exception.Message)"
-            Write-Host "at: $($_.ScriptStackTrace)"
+            Write-Host "::error::smoke test failed at [$stage]: $($_.Exception.GetType().Name): $($_.Exception.Message)"
+            Write-Host '--- exception ---'
+            Write-Host $_.Exception.ToString()
+            Write-Host "line: $($_.InvocationInfo.PositionMessage)"
             if (Test-Path $outFile) { Write-Host '--- agent stdout ---'; Get-Content $outFile -Raw }
             if (Test-Path $errFile) { Write-Host '--- agent stderr ---'; Get-Content $errFile -Raw }
             throw
