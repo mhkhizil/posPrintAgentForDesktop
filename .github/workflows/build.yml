@@ -1,0 +1,58 @@
+name: print-agent
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows build and tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Format (informational)
+        shell: pwsh
+        run: gofmt -w .
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          go build -trimpath -ldflags "-s -w -X main.version=${{ github.run_number }}" -o dist/pos-print-agent.exe ./cmd/pos-print-agent
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pos-print-agent-windows
+          path: dist/pos-print-agent.exe
+          if-no-files-found: error
+
+  linux:
+    name: Linux build and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...

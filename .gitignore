@@ -1,0 +1,16 @@
+# Build output
+/dist/
+/bin/
+*.exe
+*.msi
+*.zip
+
+# Local logs and runtime files
+/logs/
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
