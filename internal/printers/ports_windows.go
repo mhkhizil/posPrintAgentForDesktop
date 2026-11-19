@@ -6,27 +6,8 @@ import (
 	"strings"
 )
 
-// usbInstanceForPort maps a spooler port (USB001) to the USB device instance
-// Windows assigned to it. The USB print monitor keeps that mapping under its
-// Ports key; the value name differs between Windows versions, so the first value
-// that looks like a device instance is used.
-func usbInstanceForPort(port string) (string, bool) {
-	if strings.TrimSpace(port) == "" {
-		return "", false
-	}
-
-	values, err := regEnumValues(`SYSTEM\CurrentControlSet\Control\Print\Monitors\USB Monitor\Ports\` + port)
-	if err != nil {
-		return "", false
-	}
-	for _, value := range values {
-		if looksLikeDeviceInstance(value.Value) {
-			return strings.TrimSpace(value.Value), true
-		}
-	}
-	return "", false
-}
-
+// looksLikeDeviceInstance accepts the PnP instance id the USB print monitor keeps
+// for a port, e.g. USBPRINT\EPSONTM-T88V\4&2b9f1c3a&0&USB001.
 func looksLikeDeviceInstance(value string) bool {
 	trimmed := strings.TrimSpace(value)
 	if !strings.Contains(trimmed, `\`) {
@@ -72,15 +53,16 @@ func modelFromInstance(instance string) string {
 	return strings.TrimSpace(parts[1])
 }
 
-func statusText(status uint32) string {
-	switch {
-	case status&printerStatusOffline != 0:
-		return "offline"
-	case status&printerStatusError != 0:
-		return "error"
-	case status&printerStatusPrinting != 0:
+// statusText maps a PrinterStatus value from Get-Printer.
+func statusText(status int) string {
+	switch status {
+	case 4:
 		return "printing"
-	case status&printerStatusBusy != 0:
+	case 7, 11:
+		return "offline"
+	case 9:
+		return "error"
+	case 10:
 		return "busy"
 	default:
 		return "idle"
