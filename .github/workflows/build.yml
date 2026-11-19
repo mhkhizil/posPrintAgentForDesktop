@@ -38,7 +38,6 @@ jobs:
       # spooler/TCP wiring is exercised on Windows instead of only compiled.
       - name: Smoke test (health, printers, TCP print)
         shell: pwsh
-        continue-on-error: true
         run: |
           $ErrorActionPreference = 'Stop'
           $outFile = Join-Path $env:RUNNER_TEMP 'agent.out.log'
@@ -57,7 +56,7 @@ jobs:
             $stage = 'health'
             $health = $null
             for ($i = 0; $i -lt 40; $i++) {
-              try { $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/health' -TimeoutSec 2; break }
+              try { $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/health' -DisableKeepAlive -TimeoutSec 2; break }
               catch {
                 if ($agent.HasExited) {
                   $err = Get-Content $errFile -Raw -ErrorAction SilentlyContinue
@@ -74,7 +73,7 @@ jobs:
             Write-Host 'stage: printers'
             $stage = 'printers'
             $headers = @{ 'X-Pos-Agent-Token' = $health.token }
-            $printers = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/printers?transport=USB' -Headers $headers
+            $printers = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/printers?transport=USB' -DisableKeepAlive -Headers $headers
             Write-Host ("USB queues found: {0}" -f @($printers.printers).Count)
 
             Write-Host 'stage: print over TCP'
@@ -92,7 +91,7 @@ jobs:
               encoding   = 'base64'
             } | ConvertTo-Json
 
-            $report = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8735/v1/print' `
+            $report = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8735/v1/print' -DisableKeepAlive `
               -Headers $headers -ContentType 'application/json' -Body $body
             if (-not $report.success) { throw 'the print endpoint did not report success' }
             if ($report.bytesWritten -ne $payload.Length) { throw "bytesWritten was $($report.bytesWritten)" }
@@ -142,7 +141,7 @@ jobs:
             Write-Host ($query -join "`n")
             if ($LASTEXITCODE -ne 0) { throw 'the service is not registered' }
             if (($query -join "`n") -notmatch 'RUNNING') { throw 'the service did not reach RUNNING' }
-            $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/health' -TimeoutSec 5
+            $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8735/v1/health' -DisableKeepAlive -TimeoutSec 5
             if (-not $health.ok) { throw 'the service did not answer /v1/health' }
           }
           catch {
