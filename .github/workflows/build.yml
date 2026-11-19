@@ -112,12 +112,12 @@ jobs:
             $client.Close()
           }
           catch {
-            $tail = ''
-            if (Test-Path $errFile) { $tail = ((Get-Content $errFile -Raw -ErrorAction SilentlyContinue) -replace "`r?`n", ' | ') }
-            if ($tail.Length -gt 500) { $tail = $tail.Substring($tail.Length - 500) }
+            $head = ''
+            if (Test-Path $errFile) { $head = ((Get-Content $errFile -TotalCount 45 -ErrorAction SilentlyContinue) -join ' | ') }
+            if ($head.Length -gt 1500) { $head = $head.Substring(0, 1500) }
             $exited = 'n/a'; $code = 'n/a'
             if ($agent) { $exited = $agent.HasExited; if ($agent.HasExited) { $code = $agent.ExitCode } }
-            Write-Host "::error::smoke[$stage] $($_.Exception.GetType().Name): $($_.Exception.Message) || agentExited=$exited code=$code || stderr=$tail"
+            Write-Host "::error::smoke[$stage] $($_.Exception.GetType().Name): $($_.Exception.Message) || agentExited=$exited code=$code || stderrHead=$head"
             Write-Host '--- exception ---'
             Write-Host $_.Exception.ToString()
             Write-Host "line: $($_.InvocationInfo.PositionMessage)"

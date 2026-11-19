@@ -72,6 +72,32 @@ func utf16BuffToString(buf []uint16, byteLen uint32) string {
 	return syscall.UTF16ToString(buf[:count])
 }
 
+// utf16InBuffer reads a NUL-terminated string that Win32 placed inside
+// [base, end). A pointer outside that range yields "": a spooler response the
+// agent misreads must not fault the whole service.
+func utf16InBuffer(base, end unsafe.Pointer, ptr *uint16) string {
+	if ptr == nil {
+		return ""
+	}
+	start := uintptr(unsafe.Pointer(ptr))
+	if start < uintptr(base) || start >= uintptr(end) {
+		return ""
+	}
+
+	length := 0
+	limit := uintptr(end)
+	for cursor := unsafe.Pointer(ptr); uintptr(cursor) < limit; cursor = unsafe.Add(cursor, 2) {
+		if *(*uint16)(cursor) == 0 {
+			break
+		}
+		length++
+	}
+	if length == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(unsafe.Slice(ptr, length))
+}
+
 // regEnumValues reads every REG_SZ value under HKLM\<subkey>.
 func regEnumValues(subkey string) ([]regValue, error) {
 	path, err := syscall.UTF16PtrFromString(subkey)

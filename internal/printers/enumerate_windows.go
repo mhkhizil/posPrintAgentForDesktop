@@ -82,16 +82,17 @@ func ListUSB() (list []Printer, err error) {
 
 	list = make([]Printer, 0, returned)
 	base := unsafe.Pointer(&buf[0])
+	end := unsafe.Add(base, len(buf))
 
 	for index := 0; index < returned; index++ {
 		info := (*printerInfo2)(unsafe.Add(base, uintptr(index)*entrySize))
 
-		name := utf16PtrToString(info.pPrinterName)
+		name := utf16InBuffer(base, end, info.pPrinterName)
 		if name == "" || isVirtualQueue(name) {
 			continue
 		}
-		port := utf16PtrToString(info.pPortName)
-		driver := utf16PtrToString(info.pDriverName)
+		port := utf16InBuffer(base, end, info.pPortName)
+		driver := utf16InBuffer(base, end, info.pDriverName)
 		instance, hasInstance := usbInstanceForPort(port)
 		if !isUSBQueue(port, hasInstance) {
 			continue
