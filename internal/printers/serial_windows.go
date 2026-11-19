@@ -4,6 +4,7 @@ package printers
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -118,15 +119,21 @@ func configureSerial(handle syscall.Handle, timeout time.Duration) error {
 	state.StopBits = 0 // ONESTOPBIT
 
 	if ok, _, callErr := procSetCommState.Call(uintptr(handle), uintptr(unsafe.Pointer(&state))); ok == 0 {
+		runtime.KeepAlive(&state)
 		return serialConfigError(winErr(callErr))
 	}
+	// See enumPrinters: a pointer that reaches Win32 as a uintptr is invisible to
+	// the collector, so it must be kept alive across the call.
+	runtime.KeepAlive(&state)
 
 	timeouts := commTimeouts{
 		WriteTotalTimeoutConstant: uint32(timeout / time.Millisecond),
 	}
 	if ok, _, callErr := procSetCommTimeouts.Call(uintptr(handle), uintptr(unsafe.Pointer(&timeouts))); ok == 0 {
+		runtime.KeepAlive(&timeouts)
 		return serialConfigError(winErr(callErr))
 	}
+	runtime.KeepAlive(&timeouts)
 	return nil
 }
 

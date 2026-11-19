@@ -3,6 +3,7 @@
 package printers
 
 import (
+	"runtime"
 	"sort"
 	"strings"
 	"unsafe"
@@ -148,6 +149,10 @@ func enumPrinters(flags uint32) ([]byte, int, error) {
 		uintptr(unsafe.Pointer(&needed)),
 		uintptr(unsafe.Pointer(&returned)),
 	)
+	// The buffer reaches Win32 only as a uintptr inside the call arguments, so
+	// the collector cannot see it. Without this, a GC cycle during the syscall
+	// frees it and the spooler writes into freed memory (an access violation).
+	runtime.KeepAlive(buf)
 	if ok == 0 {
 		return nil, 0, spoolerError(winErr(callErr), "the local printer list")
 	}
